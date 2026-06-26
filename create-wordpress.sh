@@ -124,6 +124,18 @@ EOF
 echo -e "${RESET}"
 separator
 
+# ── Environment file ─────────────────────────────────────────
+ENV_FILE="$(dirname "$(realpath "$0")")/wp.env"
+ENV_LOADED=false
+
+if [[ -f "$ENV_FILE" ]]; then
+    # shellcheck source=/dev/null
+    source "$ENV_FILE"
+    ENV_LOADED=true
+    success "Environment file loaded: ${ENV_FILE}"
+    info    "DB_USER, DB_PASS, DB_HOST, DB_PREFIX (and MySQL root credentials if set) will be taken from the file."
+fi
+
 # ════════════════════════════════════════════════════════════
 #  SECTION 1: Site Information
 # ════════════════════════════════════════════════════════════
@@ -144,18 +156,62 @@ fi
 # ════════════════════════════════════════════════════════════
 echo -e "\n${BOLD}${BLUE}▸ Database Configuration${RESET}\n"
 
-ask        "Database name"          DB_NAME   "${DOMAIN//[.-]/_}"
-ask        "Database user"          DB_USER   "wp_${DOMAIN//[.-]/_}"
-ask_secret "Database user password" DB_PASS
-ask        "Database host"          DB_HOST   "localhost"
-ask        "Table prefix"           DB_PREFIX "wp_"
+# Database name — always prompted to prevent accidental data loss
+warn "The database name is always required interactively to prevent overwriting an existing database."
+DB_NAME_DEFAULT="${DOMAIN//[.-]/_}"
+while true; do
+    ask "Database name" DB_NAME "$DB_NAME_DEFAULT"
+    if [[ ! "$DB_NAME" =~ ^[a-zA-Z0-9_]+$ ]]; then
+        warn "Invalid database name. Use only letters, numbers, and underscores (no spaces or special characters)."
+    elif (( ${#DB_NAME} > 64 )); then
+        warn "Database name must not exceed 64 characters."
+    else
+        break
+    fi
+done
+
+# Database user
+if [[ "$ENV_LOADED" == true && -n "${DB_USER:-}" ]]; then
+    info "Database user loaded from env file: ${DB_USER}"
+else
+    ask "Database user" DB_USER "wp_${DOMAIN//[.-]/_}"
+fi
+
+# Database password
+if [[ "$ENV_LOADED" == true && -n "${DB_PASS:-}" ]]; then
+    info "Database password loaded from env file."
+else
+    ask_secret "Database user password" DB_PASS
+fi
+
+# Database host
+if [[ "$ENV_LOADED" == true && -n "${DB_HOST:-}" ]]; then
+    info "Database host loaded from env file: ${DB_HOST}"
+else
+    ask "Database host" DB_HOST "localhost"
+fi
+
+# Table prefix
+if [[ "$ENV_LOADED" == true && -n "${DB_PREFIX:-}" ]]; then
+    info "Table prefix loaded from env file: ${DB_PREFIX}"
+else
+    ask "Table prefix" DB_PREFIX "wp_"
+fi
 
 ask_yn "Automatically create the database and user (requires MySQL/MariaDB root access)?" CREATE_DB "y"
 
 if [[ "$CREATE_DB" == "yes" ]]; then
     info "MySQL/MariaDB root access is required to create the database."
-    ask        "MySQL/MariaDB root user"     MYSQL_ROOT_USER "root"
-    ask_secret "MySQL/MariaDB root password" MYSQL_ROOT_PASS
+    if [[ "$ENV_LOADED" == true && -n "${MYSQL_ROOT_USER:-}" ]]; then
+        info "MySQL root user loaded from env file: ${MYSQL_ROOT_USER}"
+    else
+        ask "MySQL/MariaDB root user" MYSQL_ROOT_USER "root"
+    fi
+    if [[ "$ENV_LOADED" == true && -n "${MYSQL_ROOT_PASS:-}" ]]; then
+        info "MySQL root password loaded from env file."
+    else
+        ask_secret "MySQL/MariaDB root password" MYSQL_ROOT_PASS
+    fi
 fi
 
 # ════════════════════════════════════════════════════════════
@@ -282,7 +338,15 @@ info "Step 3/6 — Configuring database..."
 if [[ "$CREATE_DB" == "yes" ]]; then
     MYSQL_CMD="mysql -u${MYSQL_ROOT_USER} -p${MYSQL_ROOT_PASS}"
 
-    $MYSQL_CMD -e "CREATE DATABASE IF NOT EXISTS \`${DB_NAME}\` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;" \
+    # Safety check: abort if the database already exists to prevent data corruption
+    DB_EXISTS=$(mysql -u"${MYSQL_ROOT_USER}" -p"${MYSQL_ROOT_PASS}" \
+        --batch --skip-column-names \
+        -e "SELECT COUNT(*) FROM INFORMATION_SCHEMA.SCHEMATA WHERE SCHEMA_NAME='${DB_NAME}';" 2>/dev/null || echo "0")
+    if [[ "${DB_EXISTS// /}" -gt 0 ]]; then
+        die "Database '${DB_NAME}' already exists. Choose a different name to prevent corrupting existing data."
+    fi
+
+    $MYSQL_CMD -e "CREATE DATABASE \`${DB_NAME}\` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;" \
         || die "Failed to create the database."
 
     $MYSQL_CMD -e "CREATE USER IF NOT EXISTS '${DB_USER}'@'${DB_HOST}' IDENTIFIED BY '${DB_PASS}';" \
