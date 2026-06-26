@@ -610,11 +610,7 @@ echo ""
 echo -e "  ${BOLD}${YELLOW}Next steps:${RESET}"
 echo -e "   1. Point the DNS of ${DOMAIN} to this server."
 
-if [[ "$WEB_SERVER" != "None (skip vhost configuration)" ]]; then
-    echo -e "   2. Consider getting an SSL certificate: certbot --${WEB_SERVER,,} -d ${DOMAIN}$(
-        [[ "$ADD_WWW" == "yes" ]] && echo " -d www.${DOMAIN}"
-    )"
-else
+if [[ "$WEB_SERVER" == "None (skip vhost configuration)" ]]; then
     echo -e "   2. Configure your web server manually pointing to ${WEB_ROOT}"
 fi
 
