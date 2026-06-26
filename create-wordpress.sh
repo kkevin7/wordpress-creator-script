@@ -447,15 +447,6 @@ create_apache_vhost() {
         server_alias_block="    ServerAlias www.${DOMAIN}"
     fi
 
-    local php_block=""
-    if [[ "$USE_CUSTOM_PHP" == "yes" ]]; then
-        php_block="
-    # PHP-FPM via socket
-    <FilesMatch \\.php\$>
-        SetHandler \"proxy:unix:${PHP_FPM_SOCK}|fcgi://localhost\"
-    </FilesMatch>"
-    fi
-
     cat > "$conf_file" <<APACHECONF
 <VirtualHost *:80>
     ServerName   ${DOMAIN}
@@ -468,8 +459,12 @@ ${server_alias_block}
         Options -Indexes +FollowSymLinks
         AllowOverride All
         Require all granted
+
+        # PHP-FPM via socket
+        <FilesMatch \\.php\$>
+            SetHandler "proxy:unix:${PHP_FPM_SOCK}|fcgi://localhost"
+        </FilesMatch>
     </Directory>
-${php_block}
 
     # Logs
     ErrorLog  \${APACHE_LOG_DIR}/${DOMAIN}_error.log
@@ -485,10 +480,7 @@ APACHECONF
     fi
 
     if command -v a2enmod &>/dev/null; then
-        a2enmod rewrite &>/dev/null
-        if [[ "$USE_CUSTOM_PHP" == "yes" ]]; then
-            a2enmod proxy_fcgi setenvif &>/dev/null
-        fi
+        a2enmod rewrite proxy_fcgi setenvif &>/dev/null
     fi
 
     if systemctl is-active --quiet apache2; then
