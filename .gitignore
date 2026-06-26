@@ -1,0 +1,25 @@
+# ── Claude Code ─────────────────────────────────────────────
+.claude/
+
+# ── Editores ─────────────────────────────────────────────────
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# ── Logs y temporales ────────────────────────────────────────
+*.log
+/tmp/
+/temp/
+
+# ── Variables de entorno / secretos ─────────────────────────
+.env
+.env.*
+!.env.example
+*.secret
+
+# ── Backups de editores de texto ─────────────────────────────
+*.bak
+*.orig
