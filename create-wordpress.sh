@@ -338,6 +338,14 @@ info "Step 3/6 — Configuring database..."
 if [[ "$CREATE_DB" == "yes" ]]; then
     MYSQL_CMD="mysql -u${MYSQL_ROOT_USER} -p${MYSQL_ROOT_PASS}"
 
+    # Safety check: warn if the WordPress DB user is the same as the admin user
+    if [[ "$DB_USER" == "$MYSQL_ROOT_USER" ]]; then
+        warn "WARNING: The database user '${DB_USER}' is the same as the MySQL admin user."
+        warn "This is a security risk — WordPress will connect to MySQL with admin credentials."
+        ask_yn "Do you want to continue anyway?" CONTINUE_ADMIN_USER "n"
+        [[ "$CONTINUE_ADMIN_USER" == "no" ]] && die "Operation cancelled. Use a dedicated database user for WordPress."
+    fi
+
     # Safety check: abort if the database already exists to prevent data corruption
     DB_EXISTS=$(mysql -u"${MYSQL_ROOT_USER}" -p"${MYSQL_ROOT_PASS}" \
         --batch --skip-column-names \
@@ -349,16 +357,31 @@ if [[ "$CREATE_DB" == "yes" ]]; then
     $MYSQL_CMD -e "CREATE DATABASE \`${DB_NAME}\` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;" \
         || die "Failed to create the database."
 
-    $MYSQL_CMD -e "CREATE USER IF NOT EXISTS '${DB_USER}'@'${DB_HOST}' IDENTIFIED BY '${DB_PASS}';" \
-        || die "Failed to create the database user."
+    # Check if the MySQL user already exists to avoid modifying an existing user
+    # and potentially affecting their permissions on other databases
+    DB_USER_EXISTS=$(mysql -u"${MYSQL_ROOT_USER}" -p"${MYSQL_ROOT_PASS}" \
+        --batch --skip-column-names \
+        -e "SELECT COUNT(*) FROM mysql.user WHERE User='${DB_USER}' AND Host='${DB_HOST}';" 2>/dev/null || echo "0")
 
+    if [[ "${DB_USER_EXISTS// /}" -gt 0 ]]; then
+        warn "MySQL user '${DB_USER}'@'${DB_HOST}' already exists — skipping user creation to preserve existing permissions on other databases."
+    else
+        $MYSQL_CMD -e "CREATE USER '${DB_USER}'@'${DB_HOST}' IDENTIFIED BY '${DB_PASS}';" \
+            || die "Failed to create the database user."
+    fi
+
+    # Grant permissions only on this specific database — existing permissions on other databases are not affected
     $MYSQL_CMD -e "GRANT ALL PRIVILEGES ON \`${DB_NAME}\`.* TO '${DB_USER}'@'${DB_HOST}';" \
         || die "Failed to grant privileges."
 
     $MYSQL_CMD -e "FLUSH PRIVILEGES;" \
         || die "Failed to flush privileges."
 
-    success "Database '${DB_NAME}' and user '${DB_USER}' created successfully."
+    if [[ "${DB_USER_EXISTS// /}" -gt 0 ]]; then
+        success "Database '${DB_NAME}' created and access granted to existing user '${DB_USER}'."
+    else
+        success "Database '${DB_NAME}' and user '${DB_USER}' created successfully."
+    fi
 else
     warn "Database creation skipped. Make sure to create it manually."
 fi
