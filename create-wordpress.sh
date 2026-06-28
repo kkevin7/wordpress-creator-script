@@ -364,22 +364,42 @@ if [[ "$CREATE_DB" == "yes" ]]; then
         -e "SELECT COUNT(*) FROM mysql.user WHERE User='${DB_USER}' AND Host='${DB_HOST}';" 2>/dev/null || echo "0")
 
     if [[ "${DB_USER_EXISTS// /}" -gt 0 ]]; then
-        warn "MySQL user '${DB_USER}'@'${DB_HOST}' already exists — skipping user creation to preserve existing permissions on other databases."
+        warn "MySQL user '${DB_USER}'@'${DB_HOST}' already exists — skipping user creation."
+
+        # Check if the user already has global privileges (ON *.*).
+        # If so, they already have access to the new database — no GRANT needed.
+        # Running GRANT on a user with global privileges can overwrite their grant
+        # record in mysql.user and cause loss of options like WITH GRANT OPTION.
+        HAS_GLOBAL_PRIV=$(mysql -u"${MYSQL_ROOT_USER}" -p"${MYSQL_ROOT_PASS}" \
+            --batch --skip-column-names \
+            -e "SELECT Select_priv FROM mysql.user WHERE User='${DB_USER}' AND Host='${DB_HOST}';" 2>/dev/null || echo "N")
+
+        if [[ "${HAS_GLOBAL_PRIV// /}" == "Y" ]]; then
+            info "User '${DB_USER}'@'${DB_HOST}' already has global privileges — no GRANT needed for '${DB_NAME}'."
+            success "Database '${DB_NAME}' created. Existing user '${DB_USER}' already has access."
+        else
+            warn "User '${DB_USER}'@'${DB_HOST}' does not have global privileges."
+            ask_yn "Grant '${DB_USER}'@'${DB_HOST}' access to '${DB_NAME}'?" GRANT_EXISTING "y"
+            if [[ "$GRANT_EXISTING" == "yes" ]]; then
+                $MYSQL_CMD -e "GRANT ALL PRIVILEGES ON \`${DB_NAME}\`.* TO '${DB_USER}'@'${DB_HOST}';" \
+                    || die "Failed to grant privileges."
+                $MYSQL_CMD -e "FLUSH PRIVILEGES;" \
+                    || die "Failed to flush privileges."
+                success "Database '${DB_NAME}' created and access granted to existing user '${DB_USER}'."
+            else
+                warn "No privileges granted. Ensure '${DB_USER}'@'${DB_HOST}' has access to '${DB_NAME}' before the WordPress site can connect."
+            fi
+        fi
     else
         $MYSQL_CMD -e "CREATE USER '${DB_USER}'@'${DB_HOST}' IDENTIFIED BY '${DB_PASS}';" \
             || die "Failed to create the database user."
-    fi
 
-    # Grant permissions only on this specific database — existing permissions on other databases are not affected
-    $MYSQL_CMD -e "GRANT ALL PRIVILEGES ON \`${DB_NAME}\`.* TO '${DB_USER}'@'${DB_HOST}';" \
-        || die "Failed to grant privileges."
+        $MYSQL_CMD -e "GRANT ALL PRIVILEGES ON \`${DB_NAME}\`.* TO '${DB_USER}'@'${DB_HOST}';" \
+            || die "Failed to grant privileges."
 
-    $MYSQL_CMD -e "FLUSH PRIVILEGES;" \
-        || die "Failed to flush privileges."
+        $MYSQL_CMD -e "FLUSH PRIVILEGES;" \
+            || die "Failed to flush privileges."
 
-    if [[ "${DB_USER_EXISTS// /}" -gt 0 ]]; then
-        success "Database '${DB_NAME}' created and access granted to existing user '${DB_USER}'."
-    else
         success "Database '${DB_NAME}' and user '${DB_USER}' created successfully."
     fi
 else
